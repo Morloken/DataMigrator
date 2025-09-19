@@ -21,7 +21,7 @@ class Program
         Console.WriteLine("Підключення до БД: " + targetConnStr);
 
         // --- CSV файл ---
-        string csvFile = Path.Combine(AppContext.BaseDirectory, "C:\\Users\\user1\\Documents\\Tables\\Coordinates.csv");
+        string csvFile = Path.Combine(AppContext.BaseDirectory, "C:\\Users\\user1\\Documents\\Tables\\Favouriote_Station.csv");
 
         // --- Мапінг стовпців CSV -> таблиця Atmosphere ---
         //var columnMapping = new Dictionary<string, string>
@@ -30,7 +30,7 @@ class Program
         //    { "Designation", "designation" }
         //};
         var columnMapping = new Dictionary<string, string>
-    {
+    {//--------------------------------------------CHANGE
         { "ID_Station", "id_station" },  // з CSV в UUID
         { "Longitude", "location" },     // Longitude+Latitude в POINT
         { "Latitude", "location" }
@@ -112,20 +112,30 @@ class Program
                     lat = val;
             }
 
-            string insertQuery = @"
-INSERT INTO Station (id_station, city, name, status, location) 
-VALUES (@id, @city, @name, @status, @loc)";
-            using var cmd = new NpgsqlCommand(insertQuery, conn);
+            //            string insertQuery = @"
+            //INSERT INTO Station (id_station, city, name, status, location) 
+            //VALUES (@id, @city, @name, @status, @loc)";
+            //            using var cmd = new NpgsqlCommand(insertQuery, conn);
 
-            cmd.Parameters.AddWithValue("id", idStation);
-            cmd.Parameters.AddWithValue("city", "Unknown");          // дефолтне місто
-            cmd.Parameters.AddWithValue("name", "Station " + i);     // дефолтне ім'я
-            cmd.Parameters.AddWithValue("status", false);            // дефолтний статус
-            cmd.Parameters.AddWithValue("loc", new NpgsqlTypes.NpgsqlPoint(
-                double.Parse(lon, CultureInfo.InvariantCulture),
-                double.Parse(lat, CultureInfo.InvariantCulture)));
+            //            cmd.Parameters.AddWithValue("id", idStation);
+            //            cmd.Parameters.AddWithValue("city", "Unknown");          // дефолтне місто
+            //            cmd.Parameters.AddWithValue("name", "Station " + i);     // дефолтне ім'я
+            //            cmd.Parameters.AddWithValue("status", false);            // дефолтний статус
+            //            cmd.Parameters.AddWithValue("loc", new NpgsqlTypes.NpgsqlPoint(
+            //                double.Parse(lon, CultureInfo.InvariantCulture),
+            //                double.Parse(lat, CultureInfo.InvariantCulture)));
 
-            cmd.ExecuteNonQuery();
+            //            cmd.ExecuteNonQuery();
+            // вставка в Favourite_Station
+            var insertCmd = new NpgsqlCommand(
+                "INSERT INTO Favourite_Station (user_name, id_station) VALUES (@user, @station)", conn);
+
+            insertCmd.Parameters.AddWithValue("user", rec.ID_User.ToString());
+            insertCmd.Parameters.AddWithValue("station", (Guid)stationUuid);
+
+            insertCmd.ExecuteNonQuery();
+            Console.WriteLine($"✅ Додано: User {rec.ID_User} -> Station {rec.ID_Station}");
+
         }
 
         conn.Close();
