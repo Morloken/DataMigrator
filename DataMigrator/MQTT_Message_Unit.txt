@@ -1,0 +1,112 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Microsoft.Extensions.Configuration;
+using Npgsql;
+
+class Program
+{
+    static void Main()
+    {
+        var builder = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("C:\\Users\\user1\\Documents\\GitHub\\DataMigrator\\DataMigrator\\appsettings.json", optional: false, reloadOnChange: true);
+
+        var configuration = builder.Build();
+        string targetConnStr = configuration.GetConnectionString("AtmosphereDB");
+
+        Console.WriteLine("Підключення до БД: " + targetConnStr);
+
+        string csvFile = Path.Combine(AppContext.BaseDirectory, "C:\\Users\\user1\\Documents\\Tables\\MQTT_Message_Unit.csv");
+
+        InsertMqttMessages(csvFile, targetConnStr);
+
+        Console.WriteLine("Міграція MQTT_Message_Unit завершена потужно!");
+    }
+
+    static void InsertMqttMessages(string csvPath, string connStr)
+    {
+        if (!File.Exists(csvPath))
+        {
+            Console.WriteLine("CSV файл не знайдено: " + csvPath);
+            return;
+        }
+
+        var lines = File.ReadAllLines(csvPath);
+        if (lines.Length < 2)
+        {
+            Console.WriteLine("CSV порожній або тільки заголовок.");
+            return;
+        }
+
+        using var conn = new NpgsqlConnection(connStr);
+        conn.Open();
+
+        // 🔹 Маппінг старих ID станцій → реальні UUID
+        var stationMap = new Dictionary<string, Guid>
+        {
+            { "1001", new Guid("204b89c5-a3a2-4254-876e-e95b139f06eb") },
+            { "1002", new Guid("21390337-e4c2-4081-86fe-5515a01a6aea") },
+            { "1003", new Guid("2f91a5d9-ea67-4a45-9d2b-a0ed21c43267") },
+            { "1004", new Guid("4c292434-ec1b-44ae-b508-e5ec9a655324") }
+            // додати інші потрібні з CSV
+        };
+
+        // 🔹 Маппінг старих ID міряних одиниць → UUID з measured_unit
+        var measuredUnitMap = new Dictionary<string, Guid>
+        {
+            { "1", new Guid("a6f9a400-0203-4088-9021-ec60c40f781c") }, // Humidity
+            { "2", new Guid("0a9f2e36-d01f-4a45-8f59-b54546f7dbff") }, // PM10
+            { "3", new Guid("a6f12626-05fb-48e5-9a3a-60623340688d") }, // PM2.5
+            { "4", new Guid("966dae08-3a29-4287-a630-4a5aafaa7f33") }, // PM
+            { "5", new Guid("4b586618-7e66-435b-bf04-5cb138a5c83c") }, // Pressure
+            { "6", new Guid("380c2c36-150c-4f87-b80f-7f2d93d7ab41") }, // Temperature
+            { "7", new Guid("9f824f74-ae39-46fa-836a-472491c2e613") }, // CO2
+            { "8", new Guid("a4d925d5-8983-4aeb-8eb3-315f04443245") }  // TVOC
+            // додати інші за необхідністю
+        };
+
+        for (int i = 1; i < lines.Length; i++)
+        {
+            var values = lines[i].Split(',');
+            if (values.Length < 4)
+            {
+                Console.WriteLine($"Пропускаємо рядок {i} – недостатньо колонок.");
+                continue;
+            }
+
+            string oldStationId = values[0].Trim();
+            string oldMeasuredUnitId = values[1].Trim();
+            string message = values[2].Trim();
+            int queueNumber = int.Parse(values[3].Trim());
+
+            if (!stationMap.TryGetValue(oldStationId, out Guid stationUuid))
+            {
+                Console.WriteLine($"Пропускаємо: Station {oldStationId} не знайдено у Station.");
+                continue;
+            }
+
+            if (!measuredUnitMap.TryGetValue(oldMeasuredUnitId, out Guid measuredUuid))
+            {
+                Console.WriteLine($"Пропускаємо: Measured Unit {oldMeasuredUnitId} не знайдено у Measured_Unit.");
+                continue;
+            }
+
+           string insertQuery = "INSERT INTO mqtt_message_unit (id_station, id_measured_unit, message, \"order\") VALUES (@station, @measured, @message, @order)";
+
+            using var insertCmd = new NpgsqlCommand(insertQuery, conn);
+insertCmd.Parameters.AddWithValue("station", stationUuid);
+insertCmd.Parameters.AddWithValue("measured", measuredUuid);
+insertCmd.Parameters.AddWithValue("message", message);
+insertCmd.Parameters.AddWithValue("order", queueNumber);
+
+insertCmd.ExecuteNonQuery();
+
+
+            
+            Console.WriteLine($"Додано: Station {oldStationId} -> Measured {oldMeasuredUnitId} ({message})");
+        }
+
+        conn.Close();
+    }
+}
