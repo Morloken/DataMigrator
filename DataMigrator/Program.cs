@@ -136,6 +136,7 @@ class Program
             insertCmd.ExecuteNonQuery();
             Console.WriteLine($"✅ Додано: User {rec.ID_User} -> Station {rec.ID_Station}");
 
+
         }
 
         conn.Close();
