@@ -1,5 +1,4 @@
-﻿
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -10,7 +9,6 @@ class Program
 {
     static void Main()
     {
-        // --- Налаштування конфігурації ---
         var builder = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("C:\\Users\\user1\\Documents\\GitHub\\DataMigrator\\DataMigrator\\appsettings.json", optional: false, reloadOnChange: true);
@@ -20,28 +18,14 @@ class Program
 
         Console.WriteLine("Підключення до БД: " + targetConnStr);
 
-        // --- CSV файл ---
-        string csvFile = Path.Combine(AppContext.BaseDirectory, "C:\\Users\\user1\\Documents\\Tables\\Favouriote_Station.csv");
+        string csvFile = Path.Combine(AppContext.BaseDirectory, "C:\\Users\\user1\\Documents\\Tables\\Favorite_Station.csv");
 
-        // --- Мапінг стовпців CSV -> таблиця Atmosphere ---
-        //var columnMapping = new Dictionary<string, string>
-        //{
-        //    { "ID_Category", "id_category" },
-        //    { "Designation", "designation" }
-        //};
-        var columnMapping = new Dictionary<string, string>
-    {//--------------------------------------------CHANGE
-        { "ID_Station", "id_station" },  // з CSV в UUID
-        { "Longitude", "location" },     // Longitude+Latitude в POINT
-        { "Latitude", "location" }
-    };
+        InsertFavouriteStations(csvFile, targetConnStr);
 
-        MigrateCsvToDb(csvFile, "Station", columnMapping, targetConnStr);
-
-        Console.WriteLine("Міграція завершена потужно!");
+        Console.WriteLine("Міграція Favorite_Station завершена потужно!");
     }
 
-    static void MigrateCsvToDb(string csvPath, string targetTable, Dictionary<string, string> columnMapping, string targetConnStr)
+    static void InsertFavouriteStations(string csvPath, string connStr)
     {
         if (!File.Exists(csvPath))
         {
@@ -50,142 +34,49 @@ class Program
         }
 
         var lines = File.ReadAllLines(csvPath);
-
         if (lines.Length < 2)
         {
             Console.WriteLine("CSV порожній або тільки заголовок.");
             return;
         }
 
-        var headers = lines[0].Split(',');
+        // 🔹 Словник відповідності старих ID → UUID з Station
+        var oldIdToUuid = new Dictionary<string, Guid>
+        {
+            { "0002", Guid.Parse("204b89c5-a3a2-4254-876e-e95b139f06eb") },
+            { "0003", Guid.Parse("21390337-e4c2-4081-86fe-5515a01a6aea") },
+            { "0004", Guid.Parse("2f91a5d9-ea67-4f4a-9d2b-a0ed21c43267") },
+            { "0014", Guid.Parse("e67e9c35-9e96-4c6a-af6c-11e0e5633140") }
+            // 🔹 додай інші, якщо будуть
+        };
 
-        using var conn = new NpgsqlConnection(targetConnStr);
+        using var conn = new NpgsqlConnection(connStr);
         conn.Open();
 
-
-        //for (int i = 1; i < lines.Length; i++)
-        //{
-        //    var values = lines[i].Split(',');
-
-        //    var columns = new List<string>();
-        //    var paramNames = new List<string>();
-        //    var parameters = new List<NpgsqlParameter>();
-
-        //    for (int j = 0; j < headers.Length; j++)
-        //    {
-        //        string csvCol = headers[j];
-        //        if (!columnMapping.ContainsKey(csvCol)) continue;
-
-        //        string dbCol = columnMapping[csvCol];
-        //        object rawValue = values[j];
-        //        object convertedValue = ConvertValue(rawValue, dbCol);
-
-        //        columns.Add(dbCol);
-        //        string paramName = "@" + dbCol;
-        //        paramNames.Add(paramName);
-        //        parameters.Add(new NpgsqlParameter(paramName, convertedValue));
-        //    }
-
-        //    string insertQuery = $"INSERT INTO {targetTable} ({string.Join(",", columns)}) VALUES ({string.Join(",", paramNames)})";
-
-        //    using var cmd = new NpgsqlCommand(insertQuery, conn);
-        //    cmd.Parameters.AddRange(parameters.ToArray());
-        //    cmd.ExecuteNonQuery();
-        //}
         for (int i = 1; i < lines.Length; i++)
         {
             var values = lines[i].Split(',');
-            string lon = null;
-            string lat = null;
-            object idStation = null;
+            string idUser = values[0].Trim();
+            string oldStationId = values[1].Trim();
 
-            for (int j = 0; j < headers.Length; j++)
+            if (!oldIdToUuid.ContainsKey(oldStationId))
             {
-                string csvCol = headers[j];
-                string val = values[j].Trim();
-
-                if (csvCol == "ID_Station")
-                    idStation = Guid.NewGuid(); // або детермінований UUID
-                else if (csvCol == "Longitude")
-                    lon = val;
-                else if (csvCol == "Latitude")
-                    lat = val;
+                Console.WriteLine($"Пропускаємо: Station {oldStationId} немає у словнику відповідності.");
+                continue;
             }
 
-            //            string insertQuery = @"
-            //INSERT INTO Station (id_station, city, name, status, location) 
-            //VALUES (@id, @city, @name, @status, @loc)";
-            //            using var cmd = new NpgsqlCommand(insertQuery, conn);
+            Guid stationUuid = oldIdToUuid[oldStationId];
 
-            //            cmd.Parameters.AddWithValue("id", idStation);
-            //            cmd.Parameters.AddWithValue("city", "Unknown");          // дефолтне місто
-            //            cmd.Parameters.AddWithValue("name", "Station " + i);     // дефолтне ім'я
-            //            cmd.Parameters.AddWithValue("status", false);            // дефолтний статус
-            //            cmd.Parameters.AddWithValue("loc", new NpgsqlTypes.NpgsqlPoint(
-            //                double.Parse(lon, CultureInfo.InvariantCulture),
-            //                double.Parse(lat, CultureInfo.InvariantCulture)));
-
-            //            cmd.ExecuteNonQuery();
-            // вставка в Favourite_Station
-            var insertCmd = new NpgsqlCommand(
-                "INSERT INTO Favourite_Station (user_name, id_station) VALUES (@user, @station)", conn);
-
-            insertCmd.Parameters.AddWithValue("user", rec.ID_User.ToString());
-            insertCmd.Parameters.AddWithValue("station", (Guid)stationUuid);
-
+            // Вставка у Favourite_Station
+            string insertQuery = "INSERT INTO Favorite_Station (user_name, id_station) VALUES (@user, @station)";
+            using var insertCmd = new NpgsqlCommand(insertQuery, conn);
+            insertCmd.Parameters.AddWithValue("user", idUser);
+            insertCmd.Parameters.AddWithValue("station", stationUuid);
             insertCmd.ExecuteNonQuery();
-            Console.WriteLine($"✅ Додано: User {rec.ID_User} -> Station {rec.ID_Station}");
 
-
+            Console.WriteLine($"Додано: User {idUser} -> Station {oldStationId}");
         }
 
         conn.Close();
-    }
-
-    //static object ConvertValue(object value, string dbColumn)
-    //{
-    //    if (value == null || string.IsNullOrWhiteSpace(value.ToString()))
-    //        return DBNull.Value;
-
-    //    string s = value.ToString().Trim();
-
-    //    // 🔹 Якщо стовпець UUID, генеруємо UUID на основі числа з CSV
-    //    if (dbColumn == "id_category" && int.TryParse(s, out int intId))
-    //    {
-    //        byte[] bytes = new byte[16];
-    //        BitConverter.GetBytes(intId).CopyTo(bytes, 0);
-    //        return new Guid(bytes);
-    //    }
-
-    //    // double
-    //    if (double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out double d))
-    //        return Math.Round(d, 2);
-
-    //    // DateTime
-    //    if (DateTime.TryParse(s, out DateTime dt))
-    //        return dt;
-
-    //    return s;
-    //}
-    static object ConvertValue(object value, string dbColumn, string latitude = null)
-    {
-        if (value == null || string.IsNullOrWhiteSpace(value.ToString()))
-            return DBNull.Value;
-
-        string s = value.ToString().Trim();
-
-        if (dbColumn == "id_station")
-        {
-            // Конвертуємо рядок/число в UUID
-            return Guid.NewGuid(); // або генерація на основі CSV ID
-        }
-
-        if (dbColumn == "location" && latitude != null)
-        {
-            // Створюємо POINT(x,y)
-            return $"({s},{latitude})";
-        }
-
-        return s;
     }
 }
