@@ -18,14 +18,14 @@ class Program
 
         Console.WriteLine("Підключення до БД: " + targetConnStr);
 
-        string csvFile = Path.Combine(AppContext.BaseDirectory, "C:\\Users\\user1\\Documents\\Tables\\Favorite_Station.csv");
+        string csvFile = Path.Combine(AppContext.BaseDirectory, "C:\\Users\\user1\\Documents\\Tables\\Measured_Unit.csv");
 
-        InsertFavouriteStations(csvFile, targetConnStr);
+        InsertMeasuredUnits(csvFile, targetConnStr);
 
-        Console.WriteLine("Міграція Favorite_Station завершена потужно!");
+        Console.WriteLine("Міграція Measured_Unit завершена потужно!");
     }
 
-    static void InsertFavouriteStations(string csvPath, string connStr)
+    static void InsertMeasuredUnits(string csvPath, string connStr)
     {
         if (!File.Exists(csvPath))
         {
@@ -40,41 +40,33 @@ class Program
             return;
         }
 
-        // 🔹 Словник відповідності старих ID → UUID з Station
-        var oldIdToUuid = new Dictionary<string, Guid>
-        {
-            { "0002", Guid.Parse("204b89c5-a3a2-4254-876e-e95b139f06eb") },
-            { "0003", Guid.Parse("21390337-e4c2-4081-86fe-5515a01a6aea") },
-            { "0004", Guid.Parse("2f91a5d9-ea67-4f4a-9d2b-a0ed21c43267") },
-            { "0014", Guid.Parse("e67e9c35-9e96-4c6a-af6c-11e0e5633140") }
-            // 🔹 додай інші, якщо будуть
-        };
-
         using var conn = new NpgsqlConnection(connStr);
         conn.Open();
 
         for (int i = 1; i < lines.Length; i++)
         {
             var values = lines[i].Split(',');
-            string idUser = values[0].Trim();
-            string oldStationId = values[1].Trim();
-
-            if (!oldIdToUuid.ContainsKey(oldStationId))
+            if (values.Length < 3)
             {
-                Console.WriteLine($"Пропускаємо: Station {oldStationId} немає у словнику відповідності.");
+                Console.WriteLine($"Пропускаємо рядок {i} – недостатньо колонок.");
                 continue;
             }
 
-            Guid stationUuid = oldIdToUuid[oldStationId];
+            string title = values[0].Trim();
+            string unit = values[1].Trim();
+            // старий ID можна використати для логів або відстеження, але для БД генеруємо UUID
+            string oldId = values[2].Trim();
+            Guid newId = Guid.NewGuid();
 
-            // Вставка у Favourite_Station
-            string insertQuery = "INSERT INTO Favorite_Station (user_name, id_station) VALUES (@user, @station)";
+            string insertQuery = "INSERT INTO measured_unit (id_measured_unit, title, unit) VALUES (@id, @title, @unit)";
             using var insertCmd = new NpgsqlCommand(insertQuery, conn);
-            insertCmd.Parameters.AddWithValue("user", idUser);
-            insertCmd.Parameters.AddWithValue("station", stationUuid);
+            insertCmd.Parameters.AddWithValue("id", newId);
+            insertCmd.Parameters.AddWithValue("title", title);
+            insertCmd.Parameters.AddWithValue("unit", unit);
+
             insertCmd.ExecuteNonQuery();
 
-            Console.WriteLine($"Додано: User {idUser} -> Station {oldStationId}");
+            Console.WriteLine($"Додано: {title} ({unit})");
         }
 
         conn.Close();
