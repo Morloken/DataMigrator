@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
+using System.Collections.Generic;
 
 class Program
 {
@@ -17,14 +19,14 @@ class Program
 
         Console.WriteLine("Підключення до БД: " + targetConnStr);
 
-        string csvFile = Path.Combine(AppContext.BaseDirectory, "C:\\Users\\user1\\Documents\\Tables\\Station.csv");
+        string csvFile = Path.Combine(AppContext.BaseDirectory, "C:\\Users\\user1\\Documents\\Tables\\Results.csv");
 
-        InsertStations(csvFile, targetConnStr);
+        InsertMeasurements(csvFile, targetConnStr);
 
-        Console.WriteLine("Міграція Station завершена потужно!");
+        Console.WriteLine("Міграція Measurement завершена потужно!");
     }
 
-    static void InsertStations(string csvPath, string connStr)
+    static void InsertMeasurements(string csvPath, string connStr)
     {
         if (!File.Exists(csvPath))
         {
@@ -42,74 +44,87 @@ class Program
         using var conn = new NpgsqlConnection(connStr);
         conn.Open();
 
+        // Завантажуємо всі існуючі id_measurement, id_station та id_measured_unit
+        var existingIds = new HashSet<string>();
+        using (var cmd = new NpgsqlCommand("SELECT id_measurement FROM measurement", conn))
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read())
+                existingIds.Add(reader.GetString(0));
+
+        var existingStations = new HashSet<string>();
+        using (var cmd = new NpgsqlCommand("SELECT id_station FROM station", conn))
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read())
+                existingStations.Add(reader.GetString(0));
+
+        var existingMeasuredUnits = new HashSet<string>();
+        using (var cmd = new NpgsqlCommand("SELECT id_measured_unit FROM measured_unit", conn))
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read())
+                existingMeasuredUnits.Add(reader.GetString(0));
+
+        var writer = new StringBuilder();
+
         for (int i = 1; i < lines.Length; i++)
         {
             var values = lines[i].Split(',');
-            if (values.Length < 6)
+
+            if (values.Length < 5)
             {
                 Console.WriteLine($"Пропускаємо рядок {i} – недостатньо колонок.");
                 continue;
             }
 
-            string cityCsv = values[0].Trim();
-            string nameCsv = values[1].Trim().Trim('"');
-            string idStationCsv = values[2].Trim();
-            string statusCsv = values[3].Trim();
-            string idServerStr = values[4].Trim();
-            string idSaveEcoBotStr = values[5].Trim();
-
-            bool status = statusCsv.Equals("enabled", StringComparison.OrdinalIgnoreCase);
-
-            // Перевіряємо, чи станція вже є
-            Guid idStation;
-            using (var cmdCheck = new NpgsqlCommand("SELECT id_station FROM station WHERE id_station::text LIKE @csvId LIMIT 1", conn))
+            string idMeasurement = values[2].Trim();
+            if (existingIds.Contains(idMeasurement))
             {
-                cmdCheck.Parameters.AddWithValue("csvId", "%" + idStationCsv);
-                var result = cmdCheck.ExecuteScalar();
-                idStation = result != null ? (Guid)result : Guid.NewGuid();
+                Console.WriteLine($"Пропускаємо рядок {i} - id_measurement вже існує.");
+                continue;
             }
 
-            // UUID сервера (може бути NULL)
-            Guid? idServer = null;
-            if (!string.IsNullOrEmpty(idServerStr) && idServerStr != "NULL")
+            string timeCsv = values[0].Trim();
+
+            // Обробка value
+            string valueRaw = values[1].Trim().Trim('"');
+            string valueCsv;
+            if (string.IsNullOrWhiteSpace(valueRaw))
+                valueCsv = "\\N"; // NULL
+            else
             {
-                using var cmdServer = new NpgsqlCommand("SELECT id_server FROM mqtt_server WHERE id_server::text LIKE @idCsv LIMIT 1", conn);
-                cmdServer.Parameters.AddWithValue("idCsv", idServerStr + "%");
-                var result = cmdServer.ExecuteScalar();
-                if (result != null)
-                    idServer = (Guid)result;
+                // замінюємо кому на крапку для numeric
+                valueRaw = valueRaw.Replace(',', '.');
+
+                // перевіряємо, чи число валідне
+                if (decimal.TryParse(valueRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal val))
+                    valueCsv = val.ToString(CultureInfo.InvariantCulture);
+                else
+                {
+                    Console.WriteLine($"Пропускаємо рядок {i} - невірне число: {valueRaw}");
+                    continue;
+                }
             }
 
-            
-            Guid? idSaveEcoBot = null;
+            // id_station
+            string idStation = values[3].Trim();
+            if (!existingStations.Contains(idStation))
+                idStation = "\\N"; // NULL якщо немає у station
 
-            // location - безпечна вставка point
-            double x = 0, y = 0; // якщо координати відсутні, можна поставити 0,0
-            string insertQuery = @"
-                INSERT INTO station (id_station, city, name, status, id_server, id_saveecobot, location)
-                VALUES (@idStation, @city, @name, @status, @idServer, @idSaveEcoBot, point(@x, @y))
-                ON CONFLICT (id_station) DO UPDATE
-                SET city = EXCLUDED.city,
-                    name = EXCLUDED.name,
-                    status = EXCLUDED.status,
-                    id_server = EXCLUDED.id_server,
-                    id_saveecobot = EXCLUDED.id_saveecobot
-            ";
+            // id_measured_unit
+            string idMeasuredUnit = values[4].Trim();
+            if (!existingMeasuredUnits.Contains(idMeasuredUnit))
+                idMeasuredUnit = "\\N"; // NULL якщо немає у measured_unit
 
-            using var insertCmd = new NpgsqlCommand(insertQuery, conn);
-            insertCmd.Parameters.AddWithValue("idStation", idStation);
-            insertCmd.Parameters.AddWithValue("city", cityCsv);
-            insertCmd.Parameters.AddWithValue("name", nameCsv);
-            insertCmd.Parameters.AddWithValue("status", status);
-            insertCmd.Parameters.AddWithValue("idServer", (object)idServer ?? DBNull.Value);
-            insertCmd.Parameters.AddWithValue("idSaveEcoBot", DBNull.Value);
-            insertCmd.Parameters.AddWithValue("x", x);
-            insertCmd.Parameters.AddWithValue("y", y);
-
-            insertCmd.ExecuteNonQuery();
-
-            Console.WriteLine($"Оброблено рядок {i}: {nameCsv} -> UUID {idStation}");
+            writer.AppendLine($"{idMeasurement}\t{timeCsv}\t{valueCsv}\t{idStation}\t{idMeasuredUnit}");
+            existingIds.Add(idMeasurement); // додаємо у HashSet
         }
+
+        // COPY вставка
+        using var copy = conn.BeginTextImport(
+            "COPY measurement (id_measurement, time, value, id_station, id_measured_unit) " +
+            "FROM STDIN WITH (FORMAT text, DELIMITER E'\\t', NULL '\\N')"
+        );
+        copy.Write(writer.ToString());
+        copy.Close();
 
         conn.Close();
     }
